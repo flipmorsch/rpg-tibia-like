@@ -1,13 +1,16 @@
 import { Position, Opcode, ByteBuffer, Direction } from 'shared';
-import { MapGrid, TileType } from './MapGrid.js';
-import { AoIManager, AoIEntity } from './AoIManager.js';
-import { Player } from './Player.js';
-import { Monster } from './Monster.js';
-import { Rat } from './Rat.js';
-import { CaveRat } from './CaveRat.js';
-import { Orc } from './Orc.js';
-import { Dragon } from './Dragon.js';
+import { MapGrid, TileType } from '../map/MapGrid.js';
+import { AoIManager, AoIEntity } from '../map/AoIManager.js';
+import { Player } from '../player/Player.js';
+import { Monster } from '../monster/Monster.js';
+import { Rat } from '../monster/Rat.js';
+import { CaveRat } from '../monster/CaveRat.js';
+import { Orc } from '../monster/Orc.js';
+import { Dragon } from '../monster/Dragon.js';
 import { WebSocket } from 'ws';
+import { ConnectionManager } from '../ws/ConnectionManager.js';
+import { MonsterAI } from '../monster/MonsterAI.js';
+import { CombatSystem } from '../combat/CombatSystem.js';
 
 export class GameWorld {
   public map: MapGrid;
@@ -115,71 +118,10 @@ export class GameWorld {
   }
 
   private tickCombat(now: number) {
-    // Player combat ticks
-    for (const player of this.players.values()) {
-      if (player.hp <= 0) continue;
-      if (player.targetId !== 0) {
-        // Target can be either a monster or another player
-        const target = this.monsters.get(player.targetId) || this.players.get(player.targetId);
-        if (target && target.pos.z === player.pos.z && target.hp > 0) {
-          // Check melee range (adjacent tiles, distance <= 1.5 diagonally)
-          const dist = Math.max(Math.abs(player.pos.x - target.pos.x), Math.abs(player.pos.y - target.pos.y));
-          if (dist <= 1) {
-            if (now - player.lastAttackTime >= 2000) {
-              player.lastAttackTime = now;
-              const dmg = Math.floor(Math.random() * 11) + 5; // 5 to 15 damage
-              target.hp = Math.max(0, target.hp - dmg);
-
-              this.broadcastEntityHp(target);
-              this.broadcastCombatEffect(target.pos, 0, dmg);
-
-              if (target.hp <= 0) {
-                if (target.isPlayer) {
-                  this.handlePlayerDeath(target as Player);
-                } else {
-                  this.handleMonsterDeath(target as Monster, player);
-                }
-                player.targetId = 0;
-              }
-            }
-          }
-        } else {
-          player.targetId = 0;
-        }
-      }
-    }
-
-    // Monster combat ticks
-    for (const monster of this.monsters.values()) {
-      if (monster.hp <= 0) continue;
-      if (monster.targetId !== 0) {
-        const target = this.players.get(monster.targetId);
-        if (target && target.pos.z === monster.pos.z && target.hp > 0) {
-          const dist = Math.max(Math.abs(monster.pos.x - target.pos.x), Math.abs(monster.pos.y - target.pos.y));
-          if (dist <= 1) {
-            if (now - monster.lastAttackTime >= 2000) {
-              monster.lastAttackTime = now;
-              const bounds = monster.getDamageBounds();
-              const dmg = Math.floor(Math.random() * (bounds.max - bounds.min + 1)) + bounds.min;
-              target.hp = Math.max(0, target.hp - dmg);
-
-              this.broadcastEntityHp(target);
-              this.broadcastCombatEffect(target.pos, 0, dmg);
-
-              if (target.hp <= 0) {
-                this.handlePlayerDeath(target);
-                monster.targetId = 0;
-              }
-            }
-          }
-        } else {
-          monster.targetId = 0;
-        }
-      }
-    }
+    CombatSystem.tick(this, now);
   }
 
-  private broadcastEntityHp(entity: Player | Monster) {
+  public broadcastEntityHp(entity: Player | Monster) {
     const buffer = new ByteBuffer(32);
     buffer.writeUint8(Opcode.S2C_ENTITY_HP);
     buffer.writeUint32(entity.id);
@@ -195,7 +137,7 @@ export class GameWorld {
     }
   }
 
-  private broadcastCombatEffect(pos: Position, type: number, amount: number) {
+  public broadcastCombatEffect(pos: Position, type: number, amount: number) {
     const buffer = new ByteBuffer(32);
     buffer.writeUint8(Opcode.S2C_COMBAT_EFFECT);
     buffer.writeUint16(pos.x);
@@ -213,7 +155,7 @@ export class GameWorld {
     }
   }
 
-  private broadcastPlayerExp(player: Player) {
+  public broadcastPlayerExp(player: Player) {
     const buffer = new ByteBuffer(32);
     buffer.writeUint8(Opcode.S2C_PLAYER_EXP);
     buffer.writeUint32(player.exp);
@@ -221,97 +163,7 @@ export class GameWorld {
     player.sendPacket(buffer.getPayload());
   }
 
-  private handlePlayerDeath(player: Player) {
-    console.log(`Player '${player.name}' (ID: ${player.id}) died!`);
-    const lostExp = Math.floor(player.exp * 0.1);
-    player.exp = Math.max(0, player.exp - lostExp);
-    player.targetId = 0;
-    player.hp = player.maxHp;
-
-    // Send death message
-    const chatBuffer = new ByteBuffer(128);
-    chatBuffer.writeUint8(Opcode.S2C_CHAT_MESSAGE);
-    chatBuffer.writeUint32(0); // System sender ID
-    chatBuffer.writeString('System');
-    chatBuffer.writeUint8(1); // Chat type
-    chatBuffer.writeString(`You died and lost ${lostExp} experience points!`);
-    player.sendPacket(chatBuffer.getPayload());
-
-    this.broadcastPlayerExp(player);
-    this.broadcastEntityHp(player);
-
-    // Despawn from current floor
-    const despawnPacket = player.serializeDespawn();
-    const oldSpectators = this.aoi.getSpectators(player.pos);
-    for (const spec of oldSpectators) {
-      if (spec.id !== player.id && spec.sendPacket) {
-        spec.sendPacket(despawnPacket);
-      }
-    }
-
-    // Teleport to temple
-    const oldPos = { ...player.pos };
-    player.pos = { x: 64, y: 64, z: 7 };
-    player.knownEntityIds.clear();
-
-    this.aoi.updateEntitySector(player, oldPos);
-    this.sendMapDescription(player);
-    this.syncPlayerAoI(player);
-    this.resyncPlayerPosition(player);
-
-    // Spawn on new floor
-    const spawnPacket = player.serializeSpawn();
-    const newSpectators = this.aoi.getSpectators(player.pos);
-    for (const spec of newSpectators) {
-      if (spec.id !== player.id && spec.sendPacket) {
-        spec.sendPacket(spawnPacket);
-      }
-    }
-  }
-
-  private handleMonsterDeath(monster: Monster, killer: Player) {
-    console.log(`Monster '${monster.name}' (ID: ${monster.id}) died, killed by '${killer.name}'!`);
-    
-    // Reward player EXP
-    const expReward = monster.getExpReward();
-    killer.exp += expReward;
-    const expNeeded = killer.level * 200;
-    if (killer.exp >= expNeeded) {
-      killer.level++;
-      killer.maxHp += 20;
-      killer.hp = killer.maxHp;
-      this.broadcastEntityHp(killer);
-
-      const chatBuffer = new ByteBuffer(128);
-      chatBuffer.writeUint8(Opcode.S2C_CHAT_MESSAGE);
-      chatBuffer.writeUint32(0);
-      chatBuffer.writeString('System');
-      chatBuffer.writeUint8(1);
-      chatBuffer.writeString(`Congratulations! You leveled up to Level ${killer.level}!`);
-      killer.sendPacket(chatBuffer.getPayload());
-    }
-
-    this.broadcastPlayerExp(killer);
-
-    // Remove from simulation
-    this.monsters.delete(monster.id);
-    this.aoi.removeEntity(monster);
-
-    const despawnPacket = monster.serializeDespawn();
-    const spectators = this.aoi.getSpectators(monster.pos);
-    for (const spec of spectators) {
-      if (spec.sendPacket) {
-        spec.sendPacket(despawnPacket);
-      }
-    }
-
-    // Schedule 1-minute respawn
-    setTimeout(() => {
-      this.respawnMonster(monster.id, monster.name, monster.homePos, monster.monsterTypeId);
-    }, 60000);
-  }
-
-  private respawnMonster(id: number, name: string, spawnPos: Position, monsterTypeId: number) {
+  public respawnMonster(id: number, name: string, spawnPos: Position, monsterTypeId: number) {
     let monster: Monster;
     switch (monsterTypeId) {
       case 1:
@@ -344,128 +196,14 @@ export class GameWorld {
   }
 
   private tickMonsterAI(now: number) {
-    for (const monster of this.monsters.values()) {
-      if (now - monster.lastMoveTime < monster.getMoveCooldown()) continue;
-
-      // 1. Validate existing target
-      let target: Player | null = null;
-      if (monster.targetId !== 0) {
-        const p = this.players.get(monster.targetId);
-        if (p && p.pos.z === monster.pos.z && p.hp > 0) {
-          target = p;
-        } else {
-          monster.targetId = 0;
-        }
-      }
-
-      // 2. Scan for players within subclass aggro range if target is not set/valid
-      if (!target && monster.getAggroRange() > 0) {
-        const entities = this.aoi.getEntitiesInAoI(monster.pos);
-        for (const ent of entities) {
-          if (ent.isPlayer) {
-            const p = ent as Player;
-            const dist = Math.abs(p.pos.x - monster.pos.x) + Math.abs(p.pos.y - monster.pos.y);
-            if (dist <= monster.getAggroRange() && p.pos.z === monster.pos.z && p.hp > 0) {
-              monster.targetId = p.id;
-              target = p;
-              break;
-            }
-          }
-        }
-      }
-
-      // 3. Move/Chase Logic
-      let tx = monster.pos.x;
-      let ty = monster.pos.y;
-      const tz = monster.pos.z;
-      let moved = false;
-
-      if (target) {
-        // Chase target: step towards them
-        const dist = Math.abs(target.pos.x - monster.pos.x) + Math.abs(target.pos.y - monster.pos.y);
-        if (dist <= 1) {
-          // Already adjacent to target, don't move, just prepare to attack
-          continue;
-        }
-
-        const dx = Math.sign(target.pos.x - monster.pos.x);
-        const dy = Math.sign(target.pos.y - monster.pos.y);
-
-        const tryXFirst = Math.abs(target.pos.x - monster.pos.x) > Math.abs(target.pos.y - monster.pos.y);
-        const stepX = { x: monster.pos.x + dx, y: monster.pos.y };
-        const stepY = { x: monster.pos.x, y: monster.pos.y + dy };
-
-        const checkStep = (step: { x: number; y: number }): boolean => {
-          if (this.map.isWalkable(step.x, step.y, tz)) {
-            const tile = this.map.getTileType(step.x, step.y, tz);
-            if (tile !== TileType.STAIRS_UP && tile !== TileType.STAIRS_DOWN) {
-              tx = step.x;
-              ty = step.y;
-              return true;
-            }
-          }
-          return false;
-        };
-
-        if (tryXFirst) {
-          if (checkStep(stepX)) moved = true;
-          else if (checkStep(stepY)) moved = true;
-        } else {
-          if (checkStep(stepY)) moved = true;
-          else if (checkStep(stepX)) moved = true;
-        }
-      } else {
-        // Wander randomly (30% chance on AI tick to prevent frantic wandering)
-        if (Math.random() > 0.3) continue;
-
-        const dir: Direction = Math.floor(Math.random() * 4);
-        let dx = 0;
-        let dy = 0;
-        if (dir === Direction.NORTH) dy = -1;
-        else if (dir === Direction.EAST) dx = 1;
-        else if (dir === Direction.SOUTH) dy = 1;
-        else if (dir === Direction.WEST) dx = -1;
-
-        tx = monster.pos.x + dx;
-        ty = monster.pos.y + dy;
-
-        if (this.map.isWalkable(tx, ty, tz)) {
-          const tile = this.map.getTileType(tx, ty, tz);
-          if (tile !== TileType.STAIRS_UP && tile !== TileType.STAIRS_DOWN) {
-            moved = true;
-          }
-        }
-      }
-
-      if (moved) {
-        const oldPos = { ...monster.pos };
-        monster.pos.x = tx;
-        monster.pos.y = ty;
-        monster.lastMoveTime = now;
-
-        this.aoi.updateEntitySector(monster, oldPos);
-
-        // Broadcast movement to all spectators (both old and new positions)
-        const movePacket = this.serializeEntityMove(monster.id, oldPos, monster.pos, monster.getMoveCooldown());
-        
-        const spectators = new Set<AoIEntity>([
-          ...this.aoi.getSpectators(oldPos),
-          ...this.aoi.getSpectators(monster.pos),
-        ]);
-
-        for (const spec of spectators) {
-          if (spec.sendPacket) {
-            spec.sendPacket(movePacket);
-          }
-        }
-      }
-    }
+    MonsterAI.tick(this, now);
   }
 
   public handlePlayerLogin(name: string, socket: WebSocket): Player {
     const id = this.nextEntityId++;
     const spawnPos: Position = { x: 64, y: 64, z: 7 }; // Center surface
-    const player = new Player(id, name, spawnPos, socket);
+    const player = new Player(id, name, spawnPos);
+    ConnectionManager.getInstance().register(id, socket);
     this.players.set(id, player);
     this.aoi.addEntity(player);
 
@@ -491,6 +229,7 @@ export class GameWorld {
   public handlePlayerDisconnect(player: Player) {
     this.players.delete(player.id);
     this.aoi.removeEntity(player);
+    ConnectionManager.getInstance().remove(player.id);
 
     // Notify spectators that player despawned
     const despawnPacket = player.serializeDespawn();
@@ -613,7 +352,7 @@ export class GameWorld {
     }
   }
 
-  private sendMapDescription(player: Player) {
+  public sendMapDescription(player: Player) {
     const mapData = this.map.serializeViewport(player.pos.x, player.pos.y, player.pos.z, 20, 16);
     const buffer = new ByteBuffer(mapData.length + 8);
     buffer.writeUint8(Opcode.S2C_MAP_DESCRIPTION);
@@ -626,7 +365,7 @@ export class GameWorld {
     player.sendPacket(buffer.getPayload());
   }
 
-  private syncPlayerAoI(player: Player) {
+  public syncPlayerAoI(player: Player) {
     const currentAoI = this.aoi.getEntitiesInAoI(player.pos);
     const inRangeIds = new Set<number>();
 
@@ -678,7 +417,7 @@ export class GameWorld {
     }
   }
 
-  private resyncPlayerPosition(player: Player) {
+  public resyncPlayerPosition(player: Player) {
     const buffer = new ByteBuffer(32);
     buffer.writeUint8(Opcode.S2C_LOGIN_SUCCESS); // Re-use login success packet to force-position
     buffer.writeUint32(player.id);
@@ -699,7 +438,7 @@ export class GameWorld {
     }
   }
 
-  private serializeEntityMove(id: number, from: Position, to: Position, durationMs: number): Uint8Array {
+  public serializeEntityMove(id: number, from: Position, to: Position, durationMs: number): Uint8Array {
     const buffer = new ByteBuffer(32);
     buffer.writeUint8(Opcode.S2C_ENTITY_MOVE);
     buffer.writeUint32(id);
@@ -712,7 +451,7 @@ export class GameWorld {
     return buffer.getPayload();
   }
 
-  private serializeDespawn(id: number): Uint8Array {
+  public serializeDespawn(id: number): Uint8Array {
     const buffer = new ByteBuffer(16);
     buffer.writeUint8(Opcode.S2C_ENTITY_DESPAWN);
     buffer.writeUint32(id);

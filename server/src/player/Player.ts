@@ -1,6 +1,6 @@
 import { Position, Opcode, ByteBuffer } from 'shared';
-import { AoIEntity } from './AoIManager.js';
-import { WebSocket } from 'ws';
+import { AoIEntity } from '../map/AoIManager.js';
+import { ConnectionManager } from '../ws/ConnectionManager.js';
 
 export class Player implements AoIEntity {
   public id: number;
@@ -19,13 +19,10 @@ export class Player implements AoIEntity {
   public exp = 100;
   public level = 1;
   
-  private socket: WebSocket;
-
-  constructor(id: number, name: string, startPos: Position, socket: WebSocket) {
+  constructor(id: number, name: string, startPos: Position) {
     this.id = id;
     this.name = name;
     this.pos = { ...startPos };
-    this.socket = socket;
   }
 
   /**
@@ -40,9 +37,7 @@ export class Player implements AoIEntity {
   }
 
   public sendPacket(packet: Uint8Array): void {
-    if (this.socket.readyState === WebSocket.OPEN) {
-      this.socket.send(packet);
-    }
+    ConnectionManager.getInstance().send(this.id, packet);
   }
 
   /**

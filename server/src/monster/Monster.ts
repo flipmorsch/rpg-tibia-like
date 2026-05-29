@@ -1,5 +1,5 @@
 import { Position, Opcode, ByteBuffer, Direction } from 'shared';
-import { AoIEntity } from './AoIManager.js';
+import { AoIEntity } from '../map/AoIManager.js';
 
 export class Monster implements AoIEntity {
   public id: number;
