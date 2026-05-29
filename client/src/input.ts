@@ -24,17 +24,6 @@ export class InputController {
       this.activeKeys.delete(e.code);
     });
 
-    // Handle chat input focus/blur states to prevent movement keys from typing
-    const chatInput = document.getElementById('chat-input') as HTMLInputElement;
-    if (chatInput) {
-      chatInput.addEventListener('focus', () => {
-        this.isChatFocused = true;
-        this.activeKeys.clear();
-      });
-      chatInput.addEventListener('blur', () => {
-        this.isChatFocused = false;
-      });
-    }
   }
 
   /**
@@ -59,5 +48,12 @@ export class InputController {
 
   public clear() {
     this.activeKeys.clear();
+  }
+
+  public setChatFocused(focused: boolean) {
+    this.isChatFocused = focused;
+    if (focused) {
+      this.activeKeys.clear();
+    }
   }
 }

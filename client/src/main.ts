@@ -1,8 +1,34 @@
 import { Direction, EntityType } from 'shared';
-import { NetworkHandler, NetworkCallbacks } from './network.js';
-import { GameRenderer } from './renderer.js';
+import { defineCustomElements } from '../ui-dist/loader/index.js';
+import { ChatGameplayController } from './gameplay/chatController.js';
+import { CombatController } from './gameplay/combatController.js';
+import { LoginGameplayController } from './gameplay/loginController.js';
 import { InputController } from './input.js';
 import { InterpolationEngine } from './interpolation.js';
+import { NetworkCallbacks, NetworkHandler } from './network.js';
+import { GameRenderer } from './renderer.js';
+import { BattleListController } from './ui/features/battle-list/controller.js';
+import { selectBattleListProps } from './ui/features/battle-list/selectors.js';
+import type { BattleListEntry } from './ui/features/battle-list/state.js';
+import { ChatController } from './ui/features/chat/controller.js';
+import { selectChatProps } from './ui/features/chat/selectors.js';
+import type { ChatMessage } from './ui/features/chat/state.js';
+import { LoginController } from './ui/features/login/controller.js';
+import { selectLoginProps } from './ui/features/login/selectors.js';
+import { createEventHub } from './ui/events/eventHub.js';
+import { WorldSnapshot } from './world/worldSnapshot.js';
+import { WorldSnapshotStore } from './world/worldSnapshotStore.js';
+
+type BattleListElement = HTMLElement & { entries: BattleListEntry[]; ready: boolean };
+type ChatPanelElement = HTMLElement & {
+  messages: ChatMessage[];
+  enabled: boolean;
+  ready: boolean;
+  focusInput?: () => Promise<void>;
+};
+type LoginModalElement = HTMLElement & { open: boolean; name: string; error: string | null; ready: boolean };
+
+defineCustomElements();
 
 class GameClient {
   private network: NetworkHandler;
@@ -10,23 +36,41 @@ class GameClient {
   private input: InputController;
   private interpolation: InterpolationEngine;
 
+  private eventHub = createEventHub();
+  private worldSnapshots = new WorldSnapshotStore();
+  private battleListController = new BattleListController();
+  private chatController = new ChatController();
+  private loginController = new LoginController();
+
+  private battleListElement: BattleListElement | null = null;
+  private chatPanelElement: ChatPanelElement | null = null;
+  private loginModalElement: LoginModalElement | null = null;
+
   private myPlayerId: number | null = null;
   private myPlayerName = '';
   private myPlayerSpeed = 100;
   private myPlayerLastMoveTime = 0;
   private sidebarThrottleMs = 100; // ms between sidebar updates
   private lastSidebarUpdate = 0;
-  private battleListRows = new Map<number, HTMLDivElement>();
-  private battleListDelegated = false;
+  private isConnected = false;
+  private playerLevel = 1;
+  private playerExp = 0;
 
   constructor() {
     this.interpolation = new InterpolationEngine();
     this.renderer = new GameRenderer('game-viewport');
-    
+
     // Setup input controller with movement callback
     this.input = new InputController((dir: Direction) => {
       this.handleMoveRequest(dir);
     });
+
+    this.bindUiComponents();
+    this.bindEventRouting();
+    this.bindFeatureSubscriptions();
+    this.bindGlobalShortcuts();
+
+    this.myPlayerName = this.loginController.getState().name;
 
     // Configure network callbacks
     const callbacks: NetworkCallbacks = {
@@ -35,7 +79,8 @@ class GameClient {
       onLoginSuccess: (id, x, y, z) => this.handleLoginSuccess(id, x, y, z),
       onLoginFailure: (reason) => this.handleLoginFailure(reason),
       onMapDescription: (minX, minY, z, w, h, tiles) => this.handleMapDescription(minX, minY, z, w, h, tiles),
-      onEntitySpawn: (id, type, name, x, y, z, speed, hp, maxHp, monsterTypeId) => this.handleEntitySpawn(id, type, name, x, y, z, speed, hp, maxHp, monsterTypeId),
+      onEntitySpawn: (id, type, name, x, y, z, speed, hp, maxHp, monsterTypeId) =>
+        this.handleEntitySpawn(id, type, name, x, y, z, speed, hp, maxHp, monsterTypeId),
       onEntityDespawn: (id) => this.handleEntityDespawn(id),
       onEntityMove: (id, fx, fy, tx, ty, z, dur) => this.handleEntityMove(id, fx, fy, tx, ty, z, dur),
       onChatMessage: (id, name, type, msg) => this.handleChatMessage(id, name, type, msg),
@@ -46,14 +91,127 @@ class GameClient {
     };
 
     this.network = new NetworkHandler(callbacks);
-    this.bindUI();
+
+    new CombatController(this.eventHub.bus, this.network, this.renderer);
+    new ChatGameplayController(this.eventHub.bus, this.network);
+    new LoginGameplayController(
+      this.eventHub.bus,
+      this.network,
+      (name) => {
+        this.myPlayerName = name;
+      },
+      () => this.getWebSocketUrl()
+    );
+
     this.startLoop();
-    // Ensure sidebar is populated initially if entities exist
-    this.updateEntitiesSidebar();
+    this.updateWorldSnapshot();
+  }
+
+  private bindUiComponents() {
+    this.battleListElement = document.querySelector('battle-list');
+    this.chatPanelElement = document.querySelector('chat-panel');
+    this.loginModalElement = document.querySelector('login-modal');
+
+    this.battleListElement?.addEventListener('ui:battle-list:attack', (event) => {
+      const detail = (event as CustomEvent<{ targetId: number }>).detail;
+      this.eventHub.dispatchUi('ui:battle-list:attack', detail);
+    });
+
+    this.chatPanelElement?.addEventListener('ui:chat:send', (event) => {
+      const detail = (event as CustomEvent<{ message: string; type: number }>).detail;
+      this.eventHub.dispatchUi('ui:chat:send', detail);
+    });
+
+    this.chatPanelElement?.addEventListener('ui:chat:focus', (event) => {
+      const detail = (event as CustomEvent<{ focused: boolean }>).detail;
+      this.eventHub.dispatchUi('ui:chat:focus', detail);
+    });
+
+    this.loginModalElement?.addEventListener('ui:login:submit', (event) => {
+      const detail = (event as CustomEvent<{ name: string }>).detail;
+      this.eventHub.dispatchUi('ui:login:submit', detail);
+    });
+
+    this.loginModalElement?.addEventListener('ui:login:name', (event) => {
+      const detail = (event as CustomEvent<{ name: string }>).detail;
+      this.eventHub.dispatchUi('ui:login:name', detail);
+    });
+  }
+
+  private bindEventRouting() {
+    this.eventHub.bus.on('ui:battle-list:attack', (payload) => {
+      this.eventHub.dispatchGameplay('gameplay:combat:attack', payload);
+    });
+
+    this.eventHub.bus.on('ui:chat:send', (payload) => {
+      this.eventHub.dispatchGameplay('gameplay:chat:send', payload);
+    });
+
+    this.eventHub.bus.on('ui:chat:focus', ({ focused }) => {
+      this.chatController.setFocused(focused);
+    });
+
+    this.eventHub.bus.on('ui:login:name', ({ name }) => {
+      this.loginController.setName(name);
+    });
+
+    this.eventHub.bus.on('ui:login:submit', ({ name }) => {
+      this.loginController.setName(name);
+      this.eventHub.dispatchGameplay('gameplay:login:request', { name });
+    });
+  }
+
+  private bindFeatureSubscriptions() {
+    this.worldSnapshots.subscribe((snapshot) => {
+      this.battleListController.setWorldSnapshot(snapshot);
+    });
+
+    this.battleListController.subscribe((state) => {
+      if (!this.battleListElement) return;
+      const props = selectBattleListProps(state);
+      this.battleListElement.entries = props.entries;
+      this.battleListElement.ready = props.ready;
+    });
+
+    this.chatController.subscribe((state) => {
+      const props = selectChatProps(state);
+      if (this.chatPanelElement) {
+        this.chatPanelElement.messages = props.messages;
+        this.chatPanelElement.enabled = props.enabled;
+        this.chatPanelElement.ready = props.ready;
+      }
+      this.input.setChatFocused(state.focused);
+    });
+
+    this.loginController.subscribe((state) => {
+      if (!this.loginModalElement) return;
+      const props = selectLoginProps(state);
+      this.loginModalElement.open = props.open;
+      this.loginModalElement.name = props.name;
+      this.loginModalElement.error = props.error;
+      this.loginModalElement.ready = props.ready;
+    });
+  }
+
+  private bindGlobalShortcuts() {
+    window.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      if (this.myPlayerId === null) return;
+      if (this.loginController.getState().open) return;
+      if (this.chatController.getState().focused || !this.chatController.getState().enabled) return;
+
+      event.preventDefault();
+      this.chatPanelElement?.focusInput?.();
+    });
   }
 
   private getMyMoveCooldown(): number {
     return Math.max(100, Math.min(1000, 300 - this.myPlayerSpeed * 0.8));
+  }
+
+  private getWebSocketUrl() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.hostname}:8080`;
   }
 
   private handleMoveRequest(direction: Direction) {
@@ -69,96 +227,10 @@ class GameClient {
     this.network.sendMove(direction);
   }
 
-  private bindUI() {
-    const loginBtn = document.getElementById('login-btn') as HTMLButtonElement;
-    const charNameInput = document.getElementById('character-name') as HTMLInputElement;
-
-    loginBtn.addEventListener('click', () => {
-      const name = charNameInput.value.trim();
-      if (name.length === 0) return;
-      this.myPlayerName = name;
-
-      // Connect to the local server
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.hostname}:8080`;
-      this.network.connect(wsUrl);
-    });
-
-    charNameInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        loginBtn.click();
-      }
-    });
-
-    // Chat handling
-    const chatInput = document.getElementById('chat-input') as HTMLInputElement;
-    const chatSend = document.getElementById('chat-send') as HTMLButtonElement;
-
-    const sendMessage = () => {
-      const msg = chatInput.value.trim();
-      if (msg.length > 0) {
-        this.network.sendChat(1, msg); // Type 1: Speak
-        chatInput.value = '';
-      }
-      chatInput.blur();
-    };
-
-    chatSend.addEventListener('click', sendMessage);
-    chatInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        sendMessage();
-      }
-    });
-
-    // Press Enter to focus chat input
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && document.activeElement !== chatInput && this.myPlayerId !== null) {
-        e.preventDefault();
-        chatInput.focus();
-      }
-    });
-
-    // Viewport left click for combat targeting
-    const canvas = document.getElementById('game-viewport') as HTMLCanvasElement;
-    canvas.addEventListener('click', (e) => {
-      if (this.myPlayerId === null) return;
-      const me = this.interpolation.getEntity(this.myPlayerId);
-      if (!me) return;
-
-      const rect = canvas.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
-      const clickY = e.clientY - rect.top;
-
-      const tileSize = 32;
-      const camX = me.visualX;
-      const camY = me.visualY;
-      const camZ = me.gridZ;
-
-      const deltaX = clickX - canvas.width / 2;
-      const deltaY = clickY - canvas.height / 2;
-      const worldDeltaX = deltaX / tileSize + 0.5;
-      const worldDeltaY = deltaY / tileSize + 0.5;
-      const targetGridX = Math.floor(camX + worldDeltaX);
-      const targetGridY = Math.floor(camY + worldDeltaY);
-
-      // Search for any entity at clicked coordinate on current floor
-      let clickedEntityId = 0;
-      const entities = this.interpolation.getEntities();
-      for (const ent of entities.values()) {
-        if (ent.gridZ === camZ && ent.gridX === targetGridX && ent.gridY === targetGridY && ent.id !== this.myPlayerId) {
-          clickedEntityId = ent.id;
-          break;
-        }
-      }
-
-      this.network.sendAttack(clickedEntityId);
-      this.renderer.setTargetId(clickedEntityId);
-    });
-  }
-
   // --- Network Event Handlers ---
 
   private handleConnect() {
+    this.isConnected = true;
     const dot = document.getElementById('status-dot')!;
     const text = document.getElementById('status-text')!;
     dot.className = 'status-dot online';
@@ -166,37 +238,34 @@ class GameClient {
 
     // Automatically send login request once socket is open
     this.network.sendLogin(this.myPlayerName);
+    this.updateWorldSnapshot();
   }
 
   private handleDisconnect() {
+    this.isConnected = false;
     this.myPlayerId = null;
     this.interpolation.clear();
     this.input.clear();
+    this.renderer.setTargetId(0);
 
     const dot = document.getElementById('status-dot')!;
     const text = document.getElementById('status-text')!;
     dot.className = 'status-dot';
     text.innerText = 'Disconnected';
 
-    // Show login modal again
-    document.getElementById('login-modal')!.style.display = 'flex';
-
-    // Disable chat
-    (document.getElementById('chat-input') as HTMLInputElement).disabled = true;
-    (document.getElementById('chat-send') as HTMLButtonElement).disabled = true;
+    this.loginController.show();
+    this.chatController.setEnabled(false);
+    this.chatController.setFocused(false);
 
     this.pushSystemMessage('Disconnected from game server.');
+    this.updateWorldSnapshot();
   }
 
   private handleLoginSuccess(id: number, x: number, y: number, z: number) {
     this.myPlayerId = id;
-    
-    // Hide login modal
-    document.getElementById('login-modal')!.style.display = 'none';
 
-    // Enable chat UI
-    (document.getElementById('chat-input') as HTMLInputElement).disabled = false;
-    (document.getElementById('chat-send') as HTMLButtonElement).disabled = false;
+    this.loginController.hide();
+    this.chatController.setEnabled(true);
 
     // Spawn self in client local list
     this.interpolation.spawnEntity(id, this.myPlayerName, EntityType.PLAYER, x, y, z, this.myPlayerSpeed);
@@ -205,10 +274,12 @@ class GameClient {
     document.getElementById('player-name')!.innerText = this.myPlayerName;
 
     this.pushSystemMessage(`Character ${this.myPlayerName} successfully logged in.`);
+    this.updateWorldSnapshot();
   }
 
   private handleLoginFailure(reason: string) {
-    alert(`Login failed: ${reason}`);
+    this.loginController.show();
+    this.loginController.setError(`Login failed: ${reason}`);
     this.network.disconnect();
   }
 
@@ -216,10 +287,19 @@ class GameClient {
     this.renderer.setLocalMap({ minX, minY, z, width: w, height: h, tiles });
   }
 
-  private handleEntitySpawn(id: number, type: number, name: string, x: number, y: number, z: number, speed: number, hp: number, maxHp: number, monsterTypeId: number) {
+  private handleEntitySpawn(
+    id: number,
+    type: number,
+    name: string,
+    x: number,
+    y: number,
+    z: number,
+    speed: number,
+    hp: number,
+    maxHp: number,
+    monsterTypeId: number
+  ) {
     this.interpolation.spawnEntity(id, name, type as EntityType, x, y, z, speed, hp, maxHp, monsterTypeId);
-    // Refresh sidebar (throttled by update loop)
-    this.updateEntitiesSidebar();
   }
 
   private handleEntityHp(id: number, hp: number, maxHp: number) {
@@ -231,6 +311,8 @@ class GameClient {
   }
 
   private handlePlayerExp(exp: number, level: number) {
+    this.playerExp = exp;
+    this.playerLevel = level;
     const expVal = document.getElementById('player-exp');
     if (expVal) expVal.innerText = `${exp}`;
     const lvlVal = document.getElementById('player-level');
@@ -239,7 +321,6 @@ class GameClient {
 
   private handleEntityDespawn(id: number) {
     this.interpolation.despawnEntity(id);
-    this.updateEntitiesSidebar();
   }
 
   private handleEntityMove(id: number, fx: number, fy: number, tx: number, ty: number, z: number, duration: number) {
@@ -248,7 +329,7 @@ class GameClient {
     if (id === this.myPlayerId) {
       // Release movement lock timing
       this.myPlayerLastMoveTime = Date.now() - (this.getMyMoveCooldown() - duration);
-      
+
       // Update sidebar HUD positions
       const posLabel = document.getElementById('player-pos')!;
       posLabel.innerText = `${tx}, ${ty}, ${z}`;
@@ -256,186 +337,57 @@ class GameClient {
   }
 
   private handleChatMessage(id: number, name: string, _type: number, message: string) {
-    const chatLog = document.getElementById('chat-log')!;
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'chat-msg';
-
     const isSelf = id === this.myPlayerId;
-    const nameSpan = document.createElement('span');
-    nameSpan.className = isSelf ? 'name self' : 'name';
-    nameSpan.innerText = `${name}: `;
-    msgDiv.appendChild(nameSpan);
-
-    const textNode = document.createTextNode(message);
-    msgDiv.appendChild(textNode);
-
-    chatLog.appendChild(msgDiv);
-    chatLog.scrollTop = chatLog.scrollHeight;
+    this.chatController.appendPlayerMessage(name, message, isSelf);
 
     // Bubble message above visual player head
     this.interpolation.setChatBubble(id, message);
   }
 
   private pushSystemMessage(text: string) {
-    const chatLog = document.getElementById('chat-log')!;
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'chat-msg';
-
-    const span = document.createElement('span');
-    span.className = 'msg-type-system';
-    span.innerText = `System: ${text}`;
-    msgDiv.appendChild(span);
-
-    chatLog.appendChild(msgDiv);
-    chatLog.scrollTop = chatLog.scrollHeight;
+    this.chatController.appendSystemMessage(text);
   }
 
-  private bindBattleListDelegation() {
-    if (this.battleListDelegated) return;
+  private updateWorldSnapshot(now = Date.now()) {
+    const entities = Array.from(this.interpolation.getEntities().values()).map((entity) => ({
+      id: entity.id,
+      name: entity.name,
+      isPlayer: entity.isPlayer,
+      gridX: entity.gridX,
+      gridY: entity.gridY,
+      gridZ: entity.gridZ,
+      hp: entity.hp,
+      maxHp: entity.maxHp,
+      monsterTypeId: entity.monsterTypeId,
+    }));
 
-    const list = document.getElementById('entities-list')!;
-    list.addEventListener('pointerdown', (event) => {
-      const target = event.target as HTMLElement | null;
-      const row = target?.closest('.entity-row.clickable') as HTMLElement | null;
-      if (!row) return;
-      if (event.button !== 0) return;
+    const playerEntity = this.myPlayerId !== null ? this.interpolation.getEntity(this.myPlayerId) : undefined;
+    const player = playerEntity
+      ? {
+          id: playerEntity.id,
+          name: playerEntity.name,
+          speed: this.myPlayerSpeed,
+          cooldownMs: this.getMyMoveCooldown(),
+          position: {
+            x: playerEntity.gridX,
+            y: playerEntity.gridY,
+            z: playerEntity.gridZ,
+          },
+          level: this.playerLevel,
+          exp: this.playerExp,
+        }
+      : null;
 
-      const entityId = Number(row.dataset.entityId);
-      if (!Number.isFinite(entityId) || this.myPlayerId === null) return;
+    const snapshot: WorldSnapshot = {
+      connected: this.isConnected,
+      player,
+      entities,
+      targetId: this.renderer.getTargetId(),
+      lastUpdated: now,
+    };
 
-      event.preventDefault();
-
-      this.network.sendAttack(entityId);
-      this.renderer.setTargetId(entityId);
-      this.updateEntitiesSidebar();
-    });
-
-    list.addEventListener('keydown', (event) => {
-      const target = event.target as HTMLElement | null;
-      const row = target?.closest('.entity-row.clickable') as HTMLElement | null;
-      if (!row) return;
-
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-
-      event.preventDefault();
-      const entityId = Number(row.dataset.entityId);
-      if (!Number.isFinite(entityId) || this.myPlayerId === null) return;
-
-      this.network.sendAttack(entityId);
-      this.renderer.setTargetId(entityId);
-      this.updateEntitiesSidebar();
-    });
-
-    this.battleListDelegated = true;
-  }
-
-  private configureBattleListRow(row: HTMLDivElement, entityId: number) {
-    row.classList.add('clickable');
-    row.setAttribute('role', 'button');
-    row.tabIndex = 0;
-    row.dataset.entityId = `${entityId}`;
-  }
-
-  private updateEntitiesSidebar() {
-    this.bindBattleListDelegation();
-
-    const list = document.getElementById('entities-list')!;
-
-    // Determine current target for highlighting
-    const currentTarget = this.renderer.getTargetId();
-
-    const entities = Array.from(this.interpolation.getEntities().values());
-    const me = this.myPlayerId ? this.interpolation.getEntity(this.myPlayerId) : undefined;
-
-    // If we don't have a local player yet, just render unsorted list
-    if (!me) {
-      for (const ent of entities) {
-        if (ent.id === this.myPlayerId) continue;
-        const row = this.getOrCreateBattleListRow(ent.id);
-        this.renderBattleListRow(row, ent, currentTarget);
-        list.appendChild(row);
-      }
-      this.pruneBattleListRows(entities);
-      return;
-    }
-
-    // Filter visible entities on same floor and exclude self
-    const visible = entities.filter(e => e.gridZ === me.gridZ && e.id !== this.myPlayerId);
-
-    // Compute Chebyshev distance and sort nearest -> farthest
-    visible.sort((a, b) => {
-      const da = Math.max(Math.abs(a.gridX - me.gridX), Math.abs(a.gridY - me.gridY));
-      const db = Math.max(Math.abs(b.gridX - me.gridX), Math.abs(b.gridY - me.gridY));
-      return da - db;
-    });
-
-    for (const ent of visible) {
-      const row = this.getOrCreateBattleListRow(ent.id);
-      this.renderBattleListRow(row, ent, currentTarget);
-      list.appendChild(row);
-    }
-
-    this.pruneBattleListRows(visible);
-  }
-
-  private getOrCreateBattleListRow(entityId: number) {
-    let row = this.battleListRows.get(entityId);
-    if (row) return row;
-
-    row = document.createElement('div');
-    row.className = 'entity-row';
-    this.battleListRows.set(entityId, row);
-    return row;
-  }
-
-  private renderBattleListRow(row: HTMLDivElement, ent: { id: number; name: string; isPlayer: boolean; hp: number; maxHp: number }, currentTarget: number) {
-    row.replaceChildren();
-    row.classList.toggle('targeted', ent.id === currentTarget);
-    row.classList.toggle('clickable', !ent.isPlayer);
-    this.configureBattleListRow(row, ent.id);
-    row.setAttribute('role', !ent.isPlayer ? 'button' : 'listitem');
-    row.tabIndex = !ent.isPlayer ? 0 : -1;
-
-    const badge = document.createElement('span');
-    badge.className = `entity-type-badge ${ent.isPlayer ? 'badge-player' : 'badge-monster'}`;
-    badge.innerText = ent.isPlayer ? 'Player' : 'Monster';
-
-    const nameWrapper = document.createElement('div');
-    nameWrapper.className = 'meta';
-
-    const name = document.createElement('span');
-    name.innerText = `${ent.name} (${Math.max(0, Math.min(100, Math.round(Math.max(0, ent.maxHp > 0 ? (ent.hp / ent.maxHp) * 100 : 0))))}% HP)`;
-
-    const hpBar = document.createElement('div');
-    hpBar.className = 'entity-hp-bar';
-    const hpFill = document.createElement('div');
-    hpFill.className = 'entity-hp-fill';
-    const hpPct = ent.maxHp > 0 ? ent.hp / ent.maxHp : 0;
-    hpFill.style.width = `${Math.max(0, Math.min(1, hpPct)) * 100}%`;
-    if (hpPct > 0.66) {
-      hpFill.style.background = 'var(--accent)';
-    } else if (hpPct > 0.33) {
-      hpFill.style.background = '#f59e0b';
-    } else {
-      hpFill.style.background = 'var(--danger)';
-    }
-    hpBar.appendChild(hpFill);
-
-    nameWrapper.appendChild(name);
-    nameWrapper.appendChild(hpBar);
-
-    row.appendChild(badge);
-    row.appendChild(nameWrapper);
-  }
-
-  private pruneBattleListRows(visibleEntities: Array<{ id: number }>) {
-    const visibleIds = new Set(visibleEntities.map(entity => entity.id));
-    for (const [entityId, row] of this.battleListRows.entries()) {
-      if (!visibleIds.has(entityId)) {
-        row.remove();
-        this.battleListRows.delete(entityId);
-      }
-    }
+    this.worldSnapshots.setSnapshot(snapshot);
+    this.eventHub.dispatchWorld('world:snapshot:update', snapshot);
   }
 
   // --- Core Loop ---
@@ -450,7 +402,7 @@ class GameClient {
 
   private update() {
     const now = Date.now();
-    
+
     // 1. Update visual interpolation movements
     this.interpolation.update();
 
@@ -458,7 +410,7 @@ class GameClient {
     if (this.myPlayerId !== null) {
       const elapsed = now - this.myPlayerLastMoveTime;
       const cooldown = this.getMyMoveCooldown();
-      
+
       const canMove = elapsed >= cooldown;
       this.input.update(canMove);
 
@@ -472,10 +424,10 @@ class GameClient {
       this.renderer.render(this.interpolation.getEntities(), this.myPlayerId);
     }
 
-    // Throttled sidebar update (100ms default)
+    // Throttled world snapshot update (100ms default)
     if (now - this.lastSidebarUpdate >= this.sidebarThrottleMs) {
       this.lastSidebarUpdate = now;
-      this.updateEntitiesSidebar();
+      this.updateWorldSnapshot(now);
     }
   }
 }
