@@ -160,6 +160,8 @@ export class GameWorld {
     buffer.writeUint8(Opcode.S2C_PLAYER_EXP);
     buffer.writeUint32(player.exp);
     buffer.writeUint16(player.level);
+    buffer.writeUint16(player.speed);
+    buffer.writeUint16(player.maxHp);
     player.sendPacket(buffer.getPayload());
   }
 
@@ -214,6 +216,9 @@ export class GameWorld {
     successBuffer.writeUint16(player.pos.x);
     successBuffer.writeUint16(player.pos.y);
     successBuffer.writeUint8(player.pos.z);
+    successBuffer.writeUint16(player.hp);
+    successBuffer.writeUint16(player.maxHp);
+    successBuffer.writeUint16(player.speed);
     player.sendPacket(successBuffer.getPayload());
 
     // 2. Send Map Viewport
@@ -424,6 +429,9 @@ export class GameWorld {
     buffer.writeUint16(player.pos.x);
     buffer.writeUint16(player.pos.y);
     buffer.writeUint8(player.pos.z);
+    buffer.writeUint16(player.hp);
+    buffer.writeUint16(player.maxHp);
+    buffer.writeUint16(player.speed);
     player.sendPacket(buffer.getPayload());
   }
 

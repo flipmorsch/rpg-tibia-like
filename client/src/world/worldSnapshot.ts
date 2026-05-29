@@ -24,6 +24,8 @@ export interface PlayerSnapshot {
   position: WorldPosition;
   level: number;
   exp: number;
+  hp: number;
+  maxHp: number;
 }
 
 export interface WorldSnapshot {

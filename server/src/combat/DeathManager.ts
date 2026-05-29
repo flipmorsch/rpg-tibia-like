@@ -61,7 +61,8 @@ export class DeathManager {
     const expNeeded = killer.level * 200;
     if (killer.exp >= expNeeded) {
       killer.level++;
-      killer.maxHp += 20;
+      killer.maxHp = killer.getMaxHpForLevel();
+      killer.speed = killer.getSpeedForLevel();
       killer.hp = killer.maxHp;
       world.broadcastEntityHp(killer);
 

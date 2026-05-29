@@ -15,6 +15,8 @@ import { selectChatProps } from './ui/features/chat/selectors.js';
 import type { ChatMessage } from './ui/features/chat/state.js';
 import { LoginController } from './ui/features/login/controller.js';
 import { selectLoginProps } from './ui/features/login/selectors.js';
+import { PlayerStatsController } from './ui/features/player-stats/controller.js';
+import { selectPlayerStatsProps } from './ui/features/player-stats/selectors.js';
 import { createEventHub } from './ui/events/eventHub.js';
 import { WorldSnapshot } from './world/worldSnapshot.js';
 import { WorldSnapshotStore } from './world/worldSnapshotStore.js';
@@ -27,6 +29,18 @@ type ChatPanelElement = HTMLElement & {
   focusInput?: () => Promise<void>;
 };
 type LoginModalElement = HTMLElement & { open: boolean; name: string; error: string | null; ready: boolean };
+type PlayerStatsElement = HTMLElement & {
+  name: string;
+  level: number;
+  exp: number;
+  hp: number;
+  maxHp: number;
+  speed: number;
+  cooldownMs: number;
+  damageMin: number;
+  damageMax: number;
+  ready: boolean;
+};
 
 defineCustomElements();
 
@@ -41,10 +55,12 @@ class GameClient {
   private battleListController = new BattleListController();
   private chatController = new ChatController();
   private loginController = new LoginController();
+  private playerStatsController = new PlayerStatsController();
 
   private battleListElement: BattleListElement | null = null;
   private chatPanelElement: ChatPanelElement | null = null;
   private loginModalElement: LoginModalElement | null = null;
+  private playerStatsElement: PlayerStatsElement | null = null;
 
   private myPlayerId: number | null = null;
   private myPlayerName = '';
@@ -76,7 +92,7 @@ class GameClient {
     const callbacks: NetworkCallbacks = {
       onConnect: () => this.handleConnect(),
       onDisconnect: () => this.handleDisconnect(),
-      onLoginSuccess: (id, x, y, z) => this.handleLoginSuccess(id, x, y, z),
+      onLoginSuccess: (id, x, y, z, hp, maxHp, speed) => this.handleLoginSuccess(id, x, y, z, hp, maxHp, speed),
       onLoginFailure: (reason) => this.handleLoginFailure(reason),
       onMapDescription: (minX, minY, z, w, h, tiles) => this.handleMapDescription(minX, minY, z, w, h, tiles),
       onEntitySpawn: (id, type, name, x, y, z, speed, hp, maxHp, monsterTypeId) =>
@@ -86,7 +102,7 @@ class GameClient {
       onChatMessage: (id, name, type, msg) => this.handleChatMessage(id, name, type, msg),
       onEntityHp: (id, hp, maxHp) => this.handleEntityHp(id, hp, maxHp),
       onCombatEffect: (x, y, z, type, amount) => this.handleCombatEffect(x, y, z, type, amount),
-      onPlayerExp: (exp, level) => this.handlePlayerExp(exp, level),
+      onPlayerExp: (exp, level, speed, maxHp) => this.handlePlayerExp(exp, level, speed, maxHp),
       onHeartbeat: () => {}, // Handled silently
     };
 
@@ -111,6 +127,7 @@ class GameClient {
     this.battleListElement = document.querySelector('battle-list');
     this.chatPanelElement = document.querySelector('chat-panel');
     this.loginModalElement = document.querySelector('login-modal');
+    this.playerStatsElement = document.querySelector('player-stats');
 
     this.battleListElement?.addEventListener('ui:battle-list:attack', (event) => {
       const detail = (event as CustomEvent<{ targetId: number }>).detail;
@@ -164,6 +181,7 @@ class GameClient {
   private bindFeatureSubscriptions() {
     this.worldSnapshots.subscribe((snapshot) => {
       this.battleListController.setWorldSnapshot(snapshot);
+      this.playerStatsController.setWorldSnapshot(snapshot);
     });
 
     this.battleListController.subscribe((state) => {
@@ -190,6 +208,21 @@ class GameClient {
       this.loginModalElement.name = props.name;
       this.loginModalElement.error = props.error;
       this.loginModalElement.ready = props.ready;
+    });
+
+    this.playerStatsController.subscribe((state) => {
+      if (!this.playerStatsElement) return;
+      const props = selectPlayerStatsProps(state);
+      this.playerStatsElement.name = props.name;
+      this.playerStatsElement.level = props.level;
+      this.playerStatsElement.exp = props.exp;
+      this.playerStatsElement.hp = props.hp;
+      this.playerStatsElement.maxHp = props.maxHp;
+      this.playerStatsElement.speed = props.speed;
+      this.playerStatsElement.cooldownMs = props.cooldownMs;
+      this.playerStatsElement.damageMin = props.damageMin;
+      this.playerStatsElement.damageMax = props.damageMax;
+      this.playerStatsElement.ready = props.ready;
     });
   }
 
@@ -261,17 +294,15 @@ class GameClient {
     this.updateWorldSnapshot();
   }
 
-  private handleLoginSuccess(id: number, x: number, y: number, z: number) {
+  private handleLoginSuccess(id: number, x: number, y: number, z: number, hp: number, maxHp: number, speed: number) {
     this.myPlayerId = id;
+    this.myPlayerSpeed = speed;
 
     this.loginController.hide();
     this.chatController.setEnabled(true);
 
     // Spawn self in client local list
-    this.interpolation.spawnEntity(id, this.myPlayerName, EntityType.PLAYER, x, y, z, this.myPlayerSpeed);
-
-    // Update HUD
-    document.getElementById('player-name')!.innerText = this.myPlayerName;
+    this.interpolation.spawnEntity(id, this.myPlayerName, EntityType.PLAYER, x, y, z, speed, hp, maxHp);
 
     this.pushSystemMessage(`Character ${this.myPlayerName} successfully logged in.`);
     this.updateWorldSnapshot();
@@ -310,13 +341,10 @@ class GameClient {
     this.renderer.addCombatEffect(x, y, z, type, amount);
   }
 
-  private handlePlayerExp(exp: number, level: number) {
+  private handlePlayerExp(exp: number, level: number, speed: number, maxHp: number) {
     this.playerExp = exp;
     this.playerLevel = level;
-    const expVal = document.getElementById('player-exp');
-    if (expVal) expVal.innerText = `${exp}`;
-    const lvlVal = document.getElementById('player-level');
-    if (lvlVal) lvlVal.innerText = `${level}`;
+    this.myPlayerSpeed = speed;
   }
 
   private handleEntityDespawn(id: number) {
@@ -375,6 +403,8 @@ class GameClient {
           },
           level: this.playerLevel,
           exp: this.playerExp,
+          hp: playerEntity.hp,
+          maxHp: playerEntity.maxHp,
         }
       : null;
 
@@ -413,10 +443,6 @@ class GameClient {
 
       const canMove = elapsed >= cooldown;
       this.input.update(canMove);
-
-      // Render HUD stats
-      document.getElementById('player-speed')!.innerText = `${this.myPlayerSpeed}`;
-      document.getElementById('player-cooldown')!.innerText = `${cooldown}ms`;
     }
 
     // 3. Render frame

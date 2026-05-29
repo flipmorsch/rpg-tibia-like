@@ -54,6 +54,48 @@ export namespace Components {
          */
         "ready": boolean;
     }
+    interface PlayerStats {
+        /**
+          * @default 220
+         */
+        "cooldownMs": number;
+        /**
+          * @default 24
+         */
+        "damageMax": number;
+        /**
+          * @default 13
+         */
+        "damageMin": number;
+        /**
+          * @default 0
+         */
+        "exp": number;
+        /**
+          * @default 100
+         */
+        "hp": number;
+        /**
+          * @default 1
+         */
+        "level": number;
+        /**
+          * @default 100
+         */
+        "maxHp": number;
+        /**
+          * @default ''
+         */
+        "name": string;
+        /**
+          * @default false
+         */
+        "ready": boolean;
+        /**
+          * @default 100
+         */
+        "speed": number;
+    }
 }
 export interface BattleListCustomEvent<T> extends CustomEvent<T> {
     detail: T;
@@ -121,10 +163,17 @@ declare global {
         prototype: HTMLLoginModalElement;
         new (): HTMLLoginModalElement;
     };
+    interface HTMLPlayerStatsElement extends Components.PlayerStats, HTMLStencilElement {
+    }
+    var HTMLPlayerStatsElement: {
+        prototype: HTMLPlayerStatsElement;
+        new (): HTMLPlayerStatsElement;
+    };
     interface HTMLElementTagNameMap {
         "battle-list": HTMLBattleListElement;
         "chat-panel": HTMLChatPanelElement;
         "login-modal": HTMLLoginModalElement;
+        "player-stats": HTMLPlayerStatsElement;
     }
 }
 declare namespace LocalJSX {
@@ -175,6 +224,48 @@ declare namespace LocalJSX {
          */
         "ready"?: boolean;
     }
+    interface PlayerStats {
+        /**
+          * @default 220
+         */
+        "cooldownMs"?: number;
+        /**
+          * @default 24
+         */
+        "damageMax"?: number;
+        /**
+          * @default 13
+         */
+        "damageMin"?: number;
+        /**
+          * @default 0
+         */
+        "exp"?: number;
+        /**
+          * @default 100
+         */
+        "hp"?: number;
+        /**
+          * @default 1
+         */
+        "level"?: number;
+        /**
+          * @default 100
+         */
+        "maxHp"?: number;
+        /**
+          * @default ''
+         */
+        "name"?: string;
+        /**
+          * @default false
+         */
+        "ready"?: boolean;
+        /**
+          * @default 100
+         */
+        "speed"?: number;
+    }
 
     interface BattleListAttributes {
         "ready": boolean;
@@ -189,11 +280,24 @@ declare namespace LocalJSX {
         "error": string | null;
         "ready": boolean;
     }
+    interface PlayerStatsAttributes {
+        "name": string;
+        "level": number;
+        "exp": number;
+        "hp": number;
+        "maxHp": number;
+        "speed": number;
+        "cooldownMs": number;
+        "damageMin": number;
+        "damageMax": number;
+        "ready": boolean;
+    }
 
     interface IntrinsicElements {
         "battle-list": Omit<BattleList, keyof BattleListAttributes> & { [K in keyof BattleList & keyof BattleListAttributes]?: BattleList[K] } & { [K in keyof BattleList & keyof BattleListAttributes as `attr:${K}`]?: BattleListAttributes[K] } & { [K in keyof BattleList & keyof BattleListAttributes as `prop:${K}`]?: BattleList[K] };
         "chat-panel": Omit<ChatPanel, keyof ChatPanelAttributes> & { [K in keyof ChatPanel & keyof ChatPanelAttributes]?: ChatPanel[K] } & { [K in keyof ChatPanel & keyof ChatPanelAttributes as `attr:${K}`]?: ChatPanelAttributes[K] } & { [K in keyof ChatPanel & keyof ChatPanelAttributes as `prop:${K}`]?: ChatPanel[K] };
         "login-modal": Omit<LoginModal, keyof LoginModalAttributes> & { [K in keyof LoginModal & keyof LoginModalAttributes]?: LoginModal[K] } & { [K in keyof LoginModal & keyof LoginModalAttributes as `attr:${K}`]?: LoginModalAttributes[K] } & { [K in keyof LoginModal & keyof LoginModalAttributes as `prop:${K}`]?: LoginModal[K] };
+        "player-stats": Omit<PlayerStats, keyof PlayerStatsAttributes> & { [K in keyof PlayerStats & keyof PlayerStatsAttributes]?: PlayerStats[K] } & { [K in keyof PlayerStats & keyof PlayerStatsAttributes as `attr:${K}`]?: PlayerStatsAttributes[K] } & { [K in keyof PlayerStats & keyof PlayerStatsAttributes as `prop:${K}`]?: PlayerStats[K] };
     }
 }
 export { LocalJSX as JSX };
@@ -203,6 +307,7 @@ declare module "@stencil/core" {
             "battle-list": LocalJSX.IntrinsicElements["battle-list"] & JSXBase.HTMLAttributes<HTMLBattleListElement>;
             "chat-panel": LocalJSX.IntrinsicElements["chat-panel"] & JSXBase.HTMLAttributes<HTMLChatPanelElement>;
             "login-modal": LocalJSX.IntrinsicElements["login-modal"] & JSXBase.HTMLAttributes<HTMLLoginModalElement>;
+            "player-stats": LocalJSX.IntrinsicElements["player-stats"] & JSXBase.HTMLAttributes<HTMLPlayerStatsElement>;
         }
     }
 }

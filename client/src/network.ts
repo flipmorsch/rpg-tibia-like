@@ -1,7 +1,7 @@
 import { ByteBuffer, Opcode, Direction } from 'shared';
 
 export interface NetworkCallbacks {
-  onLoginSuccess: (playerId: number, x: number, y: number, z: number) => void;
+  onLoginSuccess: (playerId: number, x: number, y: number, z: number, hp: number, maxHp: number, speed: number) => void;
   onLoginFailure: (reason: string) => void;
   onMapDescription: (minX: number, minY: number, z: number, width: number, height: number, tiles: Uint8Array) => void;
   onEntitySpawn: (id: number, type: number, name: string, x: number, y: number, z: number, speed: number, hp: number, maxHp: number, monsterTypeId: number) => void;
@@ -10,7 +10,7 @@ export interface NetworkCallbacks {
   onChatMessage: (id: number, name: string, type: number, message: string) => void;
   onEntityHp: (id: number, hp: number, maxHp: number) => void;
   onCombatEffect: (x: number, y: number, z: number, type: number, amount: number) => void;
-  onPlayerExp: (exp: number, level: number) => void;
+  onPlayerExp: (exp: number, level: number, speed: number, maxHp: number) => void;
   onHeartbeat: () => void;
   onDisconnect: () => void;
   onConnect: () => void;
@@ -65,7 +65,10 @@ export class NetworkHandler {
           const x = buffer.readUint16();
           const y = buffer.readUint16();
           const z = buffer.readUint8();
-          this.callbacks.onLoginSuccess(playerId, x, y, z);
+          const hp = buffer.readUint16();
+          const maxHp = buffer.readUint16();
+          const speed = buffer.readUint16();
+          this.callbacks.onLoginSuccess(playerId, x, y, z, hp, maxHp, speed);
           break;
         }
 
@@ -165,7 +168,9 @@ export class NetworkHandler {
         case Opcode.S2C_PLAYER_EXP: {
           const exp = buffer.readUint32();
           const level = buffer.readUint16();
-          this.callbacks.onPlayerExp(exp, level);
+          const speed = buffer.readUint16();
+          const maxHp = buffer.readUint16();
+          this.callbacks.onPlayerExp(exp, level, speed, maxHp);
           break;
         }
 

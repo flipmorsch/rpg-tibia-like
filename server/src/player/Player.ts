@@ -36,6 +36,29 @@ export class Player implements AoIEntity {
     return Math.max(100, Math.min(1000, 300 - this.speed * 0.8));
   }
 
+  /** Level-scaled max HP: 100 + 25 per level above 1 */
+  public getMaxHpForLevel(): number {
+    return 100 + 25 * (this.level - 1);
+  }
+
+  /** Level-scaled speed: 100 + 4 per level above 1, capped at 250 */
+  public getSpeedForLevel(): number {
+    return Math.min(250, 100 + 4 * (this.level - 1));
+  }
+
+  /** Level-scaled damage bounds */
+  public getDamageBounds(): { min: number; max: number } {
+    return {
+      min: 10 + this.level * 3,
+      max: 20 + this.level * 4,
+    };
+  }
+
+  /** Level-scaled attack cooldown in ms, floors at 500ms */
+  public getAttackCooldown(): number {
+    return Math.max(500, 2000 - this.level * 35);
+  }
+
   public sendPacket(packet: Uint8Array): void {
     ConnectionManager.getInstance().send(this.id, packet);
   }

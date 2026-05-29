@@ -15,9 +15,10 @@ export class CombatSystem {
           // Check melee range (adjacent tiles, distance <= 1.5 diagonally)
           const dist = Math.max(Math.abs(player.pos.x - target.pos.x), Math.abs(player.pos.y - target.pos.y));
           if (dist <= 1) {
-            if (now - player.lastAttackTime >= 2000) {
+            if (now - player.lastAttackTime >= player.getAttackCooldown()) {
               player.lastAttackTime = now;
-              const dmg = Math.floor(Math.random() * 11) + 5; // 5 to 15 damage
+              const bounds = player.getDamageBounds();
+              const dmg = Math.floor(Math.random() * (bounds.max - bounds.min + 1)) + bounds.min;
               target.hp = Math.max(0, target.hp - dmg);
 
               world.broadcastEntityHp(target);
