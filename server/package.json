@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc && node dist/main.js",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "ws": "^8.16.0",
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@types/ws": "^8.5.10",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.7"
   }
 }
