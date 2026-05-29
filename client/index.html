@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tibado Online - 2D MMORPG</title>
+    <!-- Modern Premium Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg-color: #0b0f19;
+        --panel-bg: rgba(17, 24, 39, 0.7);
+        --panel-border: rgba(255, 255, 255, 0.08);
+        --text-color: #f3f4f6;
+        --text-muted: #9ca3af;
+        --primary: #6366f1;
+        --primary-glow: rgba(99, 102, 241, 0.15);
+        --accent: #10b981;
+        --danger: #ef4444;
+        --sidebar-width: 320px;
+        --chat-height: 200px;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        user-select: none;
+      }
+
+      body {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        background-color: var(--bg-color);
+        color: var(--text-color);
+        overflow: hidden;
+        height: 100vh;
+        width: 100vw;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Glowing Background Effect */
+      body::before {
+        content: '';
+        position: absolute;
+        width: 400px;
+        height: 400px;
+        background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+        top: -100px;
+        right: -100px;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      body::after {
+        content: '';
+        position: absolute;
+        width: 400px;
+        height: 400px;
+        background: radial-gradient(circle, rgba(16, 185, 129, 0.08) 0%, transparent 70%);
+        bottom: -150px;
+        left: -150px;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      /* Game Title Header */
+      header {
+        height: 60px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        border-bottom: 1px solid var(--panel-border);
+        background: rgba(11, 15, 25, 0.8);
+        backdrop-filter: blur(12px);
+        z-index: 10;
+      }
+
+      .logo {
+        font-family: 'Space Grotesk', sans-serif;
+        font-weight: 700;
+        font-size: 24px;
+        background: linear-gradient(90deg, #818cf8, #34d399);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        letter-spacing: 0.5px;
+      }
+
+      .logo span {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text-muted);
+        margin-left: 8px;
+        border: 1px solid var(--panel-border);
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .server-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        color: var(--text-muted);
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: var(--danger);
+        box-shadow: 0 0 8px var(--danger);
+        transition: background-color 0.3s, box-shadow 0.3s;
+      }
+
+      .status-dot.online {
+        background-color: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+      }
+
+      /* Main Screen Layout */
+      main {
+        flex: 1;
+        display: flex;
+        position: relative;
+        z-index: 5;
+        overflow: hidden;
+      }
+
+      /* Game Screen Viewport */
+      .game-container {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #060910;
+        padding: 20px;
+        position: relative;
+      }
+
+      #game-viewport {
+        border-radius: 12px;
+        border: 1px solid var(--panel-border);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        background-color: #000;
+        max-width: 100%;
+        max-height: calc(100vh - 300px);
+        aspect-ratio: 18/14;
+      }
+
+      /* Right Sidebar Details */
+      .sidebar {
+        width: var(--sidebar-width);
+        border-left: 1px solid var(--panel-border);
+        background: var(--panel-bg);
+        backdrop-filter: blur(16px);
+        display: flex;
+        flex-direction: column;
+      }
+
+      .section {
+        padding: 20px;
+        border-bottom: 1px solid var(--panel-border);
+      }
+
+      .section h3 {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 16px;
+        margin-bottom: 16px;
+        color: var(--primary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .stat-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 12px;
+        font-size: 14px;
+      }
+
+      .stat-label {
+        color: var(--text-muted);
+      }
+
+      .stat-value {
+        font-weight: 600;
+        color: var(--text-color);
+      }
+
+      .coord-badge {
+        font-family: monospace;
+        background: rgba(255, 255, 255, 0.05);
+        padding: 2px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--panel-border);
+      }
+
+      /* Chat Console Container */
+      .chat-panel {
+        height: var(--chat-height);
+        border-top: 1px solid var(--panel-border);
+        background: var(--panel-bg);
+        backdrop-filter: blur(16px);
+        display: flex;
+        flex-direction: column;
+        padding: 12px;
+      }
+
+      .chat-log {
+        flex: 1;
+        overflow-y: auto;
+        padding-right: 8px;
+        margin-bottom: 12px;
+        font-size: 13.5px;
+        line-height: 1.5;
+        font-family: monospace;
+      }
+
+      .chat-msg {
+        margin-bottom: 4px;
+      }
+
+      .chat-msg .name {
+        font-weight: bold;
+        color: var(--primary);
+      }
+
+      .chat-msg .name.self {
+        color: var(--accent);
+      }
+
+      .chat-msg .msg-type-system {
+        color: #f59e0b;
+      }
+
+      .chat-input-container {
+        display: flex;
+        gap: 8px;
+      }
+
+      .chat-input {
+        flex: 1;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--panel-border);
+        border-radius: 8px;
+        padding: 10px 16px;
+        color: var(--text-color);
+        font-family: inherit;
+        font-size: 14px;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+
+      .chat-input:focus {
+        border-color: var(--primary);
+      }
+
+      .btn {
+        background: var(--primary);
+        border: none;
+        border-radius: 8px;
+        color: white;
+        padding: 0 18px;
+        font-family: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        transition: filter 0.2s;
+      }
+
+      .btn:hover {
+        filter: brightness(1.1);
+      }
+
+      /* Login Modal */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(3, 7, 18, 0.85);
+        backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+      }
+
+      .modal {
+        background: rgba(17, 24, 39, 0.9);
+        border: 1px solid var(--panel-border);
+        padding: 40px;
+        border-radius: 16px;
+        width: 100%;
+        max-width: 420px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+        text-align: center;
+      }
+
+      .modal h2 {
+        font-family: 'Space Grotesk', sans-serif;
+        font-size: 24px;
+        margin-bottom: 8px;
+      }
+
+      .modal p {
+        color: var(--text-muted);
+        font-size: 14px;
+        margin-bottom: 24px;
+      }
+
+      .modal input {
+        width: 100%;
+        background: rgba(0, 0, 0, 0.4);
+        border: 1px solid var(--panel-border);
+        border-radius: 8px;
+        padding: 12px 16px;
+        color: var(--text-color);
+        font-family: inherit;
+        font-size: 15px;
+        outline: none;
+        margin-bottom: 20px;
+        text-align: center;
+      }
+
+      .modal input:focus {
+        border-color: var(--primary);
+      }
+
+      .modal .btn {
+        width: 100%;
+        padding: 12px 0;
+        font-size: 15px;
+      }
+
+      .entities-list {
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      .entity-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+        font-size: 13.5px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+      }
+
+      .entity-type-badge {
+        font-size: 10px;
+        text-transform: uppercase;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-weight: bold;
+      }
+
+      .badge-player {
+        background-color: rgba(99, 102, 241, 0.15);
+        color: #818cf8;
+        border: 1px solid rgba(99, 102, 241, 0.3);
+      }
+
+      .badge-monster {
+        background-color: rgba(239, 68, 68, 0.15);
+        color: #f87171;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+      }
+
+      /* Help Overlay inside game */
+      .help-overlay {
+        position: absolute;
+        top: 24px;
+        left: 24px;
+        background: rgba(17, 24, 39, 0.8);
+        border: 1px solid var(--panel-border);
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-size: 12px;
+        pointer-events: none;
+        backdrop-filter: blur(4px);
+        color: var(--text-muted);
+        line-height: 1.6;
+      }
+
+      .help-overlay b {
+        color: var(--text-color);
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Login Modal -->
+    <div id="login-modal" class="modal-overlay">
+      <div class="modal">
+        <h2>Tibado Online</h2>
+        <p>Enter your character name to enter the realm.</p>
+        <input type="text" id="character-name" placeholder="Character Name" maxlength="15" value="TibiaKnight" />
+        <button id="login-btn" class="btn">Connect & Play</button>
+      </div>
+    </div>
+
+    <!-- Header -->
+    <header>
+      <div class="logo">TIBADO <span>v1.0.0 (GSD Engine)</span></div>
+      <div class="server-status">
+        <div id="status-dot" class="status-dot"></div>
+        <span id="status-text">Disconnected</span>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main>
+      <!-- Game Container -->
+      <div class="game-container">
+        <div class="help-overlay">
+          <b>Controls:</b><br />
+          - Walk: <b>Arrow Keys</b> or <b>WASD</b><br />
+          - Chat: Press <b>Enter</b> to focus chat box<br />
+          - Stairs: Walk onto <b>Stair Tiles</b> to change floors
+        </div>
+        <canvas id="game-viewport" width="576" height="448"></canvas>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <!-- Character Stats -->
+        <div class="section">
+          <h3>My Character</h3>
+          <div class="stat-row">
+            <span class="stat-label">Name</span>
+            <span id="player-name" class="stat-value">-</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Position</span>
+            <span id="player-pos" class="stat-value coord-badge">-</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Speed</span>
+            <span id="player-speed" class="stat-value">-</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Walk Cooldown</span>
+            <span id="player-cooldown" class="stat-value">-</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Level</span>
+            <span id="player-level" class="stat-value">1</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Experience</span>
+            <span id="player-exp" class="stat-value">100</span>
+          </div>
+        </div>
+
+        <!-- Visible Entities in Area of Interest -->
+        <div class="section" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+          <h3>Visible Entities</h3>
+          <div id="entities-list" class="entities-list">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Chat Console -->
+    <div class="chat-panel">
+      <div id="chat-log" class="chat-log">
+        <div class="chat-msg"><span class="msg-type-system">System: Welcome to Tibado. Enter your name and click connect to start playing.</span></div>
+      </div>
+      <div class="chat-input-container">
+        <input type="text" id="chat-input" class="chat-input" placeholder="Type a message and press Enter..." disabled />
+        <button id="chat-send" class="btn" disabled>Send</button>
+      </div>
+    </div>
+
+    <!-- Client Script -->
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

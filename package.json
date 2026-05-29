@@ -1,0 +1,21 @@
+{
+  "name": "rpg-tibado-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "2D Grid-based server-authoritative MMORPG engine",
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace=server",
+    "dev:client": "npm run dev --workspace=client",
+    "build:shared": "npm run build --workspace=shared",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}
