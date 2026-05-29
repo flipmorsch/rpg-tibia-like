@@ -14,6 +14,10 @@ class GameClient {
   private myPlayerName = '';
   private myPlayerSpeed = 100;
   private myPlayerLastMoveTime = 0;
+  private sidebarThrottleMs = 100; // ms between sidebar updates
+  private lastSidebarUpdate = 0;
+  private battleListRows = new Map<number, HTMLDivElement>();
+  private battleListDelegated = false;
 
   constructor() {
     this.interpolation = new InterpolationEngine();
@@ -44,6 +48,8 @@ class GameClient {
     this.network = new NetworkHandler(callbacks);
     this.bindUI();
     this.startLoop();
+    // Ensure sidebar is populated initially if entities exist
+    this.updateEntitiesSidebar();
   }
 
   private getMyMoveCooldown(): number {
@@ -212,6 +218,7 @@ class GameClient {
 
   private handleEntitySpawn(id: number, type: number, name: string, x: number, y: number, z: number, speed: number, hp: number, maxHp: number, monsterTypeId: number) {
     this.interpolation.spawnEntity(id, name, type as EntityType, x, y, z, speed, hp, maxHp, monsterTypeId);
+    // Refresh sidebar (throttled by update loop)
     this.updateEntitiesSidebar();
   }
 
@@ -283,27 +290,151 @@ class GameClient {
     chatLog.scrollTop = chatLog.scrollHeight;
   }
 
-  private updateEntitiesSidebar() {
+  private bindBattleListDelegation() {
+    if (this.battleListDelegated) return;
+
     const list = document.getElementById('entities-list')!;
-    list.innerHTML = '';
+    list.addEventListener('pointerdown', (event) => {
+      const target = event.target as HTMLElement | null;
+      const row = target?.closest('.entity-row.clickable') as HTMLElement | null;
+      if (!row) return;
+      if (event.button !== 0) return;
 
-    const entities = this.interpolation.getEntities();
-    for (const ent of entities.values()) {
-      if (ent.id === this.myPlayerId) continue;
+      const entityId = Number(row.dataset.entityId);
+      if (!Number.isFinite(entityId) || this.myPlayerId === null) return;
 
-      const row = document.createElement('div');
-      row.className = 'entity-row';
+      event.preventDefault();
 
-      const badge = document.createElement('span');
-      badge.className = `entity-type-badge ${ent.isPlayer ? 'badge-player' : 'badge-monster'}`;
-      badge.innerText = ent.isPlayer ? 'Player' : 'Monster';
+      this.network.sendAttack(entityId);
+      this.renderer.setTargetId(entityId);
+      this.updateEntitiesSidebar();
+    });
 
-      const name = document.createElement('span');
-      name.innerText = ent.name;
+    list.addEventListener('keydown', (event) => {
+      const target = event.target as HTMLElement | null;
+      const row = target?.closest('.entity-row.clickable') as HTMLElement | null;
+      if (!row) return;
 
-      row.appendChild(badge);
-      row.appendChild(name);
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+
+      event.preventDefault();
+      const entityId = Number(row.dataset.entityId);
+      if (!Number.isFinite(entityId) || this.myPlayerId === null) return;
+
+      this.network.sendAttack(entityId);
+      this.renderer.setTargetId(entityId);
+      this.updateEntitiesSidebar();
+    });
+
+    this.battleListDelegated = true;
+  }
+
+  private configureBattleListRow(row: HTMLDivElement, entityId: number) {
+    row.classList.add('clickable');
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.dataset.entityId = `${entityId}`;
+  }
+
+  private updateEntitiesSidebar() {
+    this.bindBattleListDelegation();
+
+    const list = document.getElementById('entities-list')!;
+
+    // Determine current target for highlighting
+    const currentTarget = this.renderer.getTargetId();
+
+    const entities = Array.from(this.interpolation.getEntities().values());
+    const me = this.myPlayerId ? this.interpolation.getEntity(this.myPlayerId) : undefined;
+
+    // If we don't have a local player yet, just render unsorted list
+    if (!me) {
+      for (const ent of entities) {
+        if (ent.id === this.myPlayerId) continue;
+        const row = this.getOrCreateBattleListRow(ent.id);
+        this.renderBattleListRow(row, ent, currentTarget);
+        list.appendChild(row);
+      }
+      this.pruneBattleListRows(entities);
+      return;
+    }
+
+    // Filter visible entities on same floor and exclude self
+    const visible = entities.filter(e => e.gridZ === me.gridZ && e.id !== this.myPlayerId);
+
+    // Compute Chebyshev distance and sort nearest -> farthest
+    visible.sort((a, b) => {
+      const da = Math.max(Math.abs(a.gridX - me.gridX), Math.abs(a.gridY - me.gridY));
+      const db = Math.max(Math.abs(b.gridX - me.gridX), Math.abs(b.gridY - me.gridY));
+      return da - db;
+    });
+
+    for (const ent of visible) {
+      const row = this.getOrCreateBattleListRow(ent.id);
+      this.renderBattleListRow(row, ent, currentTarget);
       list.appendChild(row);
+    }
+
+    this.pruneBattleListRows(visible);
+  }
+
+  private getOrCreateBattleListRow(entityId: number) {
+    let row = this.battleListRows.get(entityId);
+    if (row) return row;
+
+    row = document.createElement('div');
+    row.className = 'entity-row';
+    this.battleListRows.set(entityId, row);
+    return row;
+  }
+
+  private renderBattleListRow(row: HTMLDivElement, ent: { id: number; name: string; isPlayer: boolean; hp: number; maxHp: number }, currentTarget: number) {
+    row.replaceChildren();
+    row.classList.toggle('targeted', ent.id === currentTarget);
+    row.classList.toggle('clickable', !ent.isPlayer);
+    this.configureBattleListRow(row, ent.id);
+    row.setAttribute('role', !ent.isPlayer ? 'button' : 'listitem');
+    row.tabIndex = !ent.isPlayer ? 0 : -1;
+
+    const badge = document.createElement('span');
+    badge.className = `entity-type-badge ${ent.isPlayer ? 'badge-player' : 'badge-monster'}`;
+    badge.innerText = ent.isPlayer ? 'Player' : 'Monster';
+
+    const nameWrapper = document.createElement('div');
+    nameWrapper.className = 'meta';
+
+    const name = document.createElement('span');
+    name.innerText = `${ent.name} (${Math.max(0, Math.min(100, Math.round(Math.max(0, ent.maxHp > 0 ? (ent.hp / ent.maxHp) * 100 : 0))))}% HP)`;
+
+    const hpBar = document.createElement('div');
+    hpBar.className = 'entity-hp-bar';
+    const hpFill = document.createElement('div');
+    hpFill.className = 'entity-hp-fill';
+    const hpPct = ent.maxHp > 0 ? ent.hp / ent.maxHp : 0;
+    hpFill.style.width = `${Math.max(0, Math.min(1, hpPct)) * 100}%`;
+    if (hpPct > 0.66) {
+      hpFill.style.background = 'var(--accent)';
+    } else if (hpPct > 0.33) {
+      hpFill.style.background = '#f59e0b';
+    } else {
+      hpFill.style.background = 'var(--danger)';
+    }
+    hpBar.appendChild(hpFill);
+
+    nameWrapper.appendChild(name);
+    nameWrapper.appendChild(hpBar);
+
+    row.appendChild(badge);
+    row.appendChild(nameWrapper);
+  }
+
+  private pruneBattleListRows(visibleEntities: Array<{ id: number }>) {
+    const visibleIds = new Set(visibleEntities.map(entity => entity.id));
+    for (const [entityId, row] of this.battleListRows.entries()) {
+      if (!visibleIds.has(entityId)) {
+        row.remove();
+        this.battleListRows.delete(entityId);
+      }
     }
   }
 
@@ -339,6 +470,12 @@ class GameClient {
     // 3. Render frame
     if (this.myPlayerId !== null) {
       this.renderer.render(this.interpolation.getEntities(), this.myPlayerId);
+    }
+
+    // Throttled sidebar update (100ms default)
+    if (now - this.lastSidebarUpdate >= this.sidebarThrottleMs) {
+      this.lastSidebarUpdate = now;
+      this.updateEntitiesSidebar();
     }
   }
 }
